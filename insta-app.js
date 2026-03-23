@@ -446,7 +446,7 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
 
         <!-- header -->
         <div class="card-header">
-          <div class="avatar">🦊</div>
+          <div class="avatar">F</div>
           <div class="header-text">
             <span class="username">Fox</span>
             <span class="location">Home of the Fox</span>
@@ -458,7 +458,7 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
             aria-label="Refresh fox">↻</button>
         </div>
 
-        <!-- image -->
+        <!-- Image -->
         <div class="image-wrap">
           ${this.loading
             ? html`<div class="shimmer"></div>`
