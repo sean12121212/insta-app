@@ -8,24 +8,31 @@ import { I18NMixin } from "@haxtheweb/i18n-manager/lib/I18NMixin.js";
 
 /**
  * `insta-app`
- * Instagram-style photo card that lazily fetches from randomfox.ca
+ * Instagram-style photo card gallery that fetches NFL player data from images.json
+ * Supports lazy loading, likes, sharing, and prev/next navigation
  *
  * @demo index.html
  * @element insta-app
  */
 export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
 
+  /**
+   * Defines the custom element tag name
+   */
   static get tag() {
     return "insta-app";
   }
 
+  /**
+   * Constructor sets default values
+   */
   constructor() {
     super();
-    this.foxImage      = "";
-    this.foxLink       = "";
-    this.loading       = false;
-    this.liked         = false;
-    this.elementVisible = false;   // controlled by IntersectionObserver
+    this.images         = [];
+    this.author         = {};
+    this.activeIndex    = 0;
+    this.loading        = false;
+    this.elementVisible = false;
     this.t = this.t || {};
     this.t = {
       ...this.t,
@@ -39,17 +46,31 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
     });
   }
 
+  /**
+   * Reactive properties
+   * images — array of player objects loaded from images.json
+   * author — single author object from images.json
+   * activeIndex — tracks which player card is currently displayed
+   * loading — true while fetch is in progress
+   * elementVisible — controlled by IntersectionObserver for lazy loading
+   */
   static get properties() {
     return {
       ...super.properties,
-      foxImage:       { type: String },
-      foxLink:        { type: String },
+      images:         { type: Array },
+      author:         { type: Object },
+      activeIndex:    { type: Number },
       loading:        { type: Boolean },
-      liked:          { type: Boolean },
       elementVisible: { type: Boolean },
     };
   }
 
+  /**
+   * Styles
+   * Scoped CSS using DDD design system tokens
+   * Covers card layout, header, image area, action bar, caption, nav overlays
+   * Includes shimmer loading skeleton, like animation, dark/light mode, and responsive breakpoints
+   */
   static get styles() {
     return [
       super.styles,
@@ -99,6 +120,7 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
           width:           var(--ddd-spacing-10);
           height:          var(--ddd-spacing-10);
           border-radius:   var(--ddd-radius-circle);
+          flex-shrink:     0;
           background:      linear-gradient(
             135deg,
             var(--ddd-theme-default-roarGolden),
@@ -107,8 +129,9 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
           display:         flex;
           align-items:     center;
           justify-content: center;
-          font-size:       var(--ddd-font-size-s);
-          flex-shrink:     0;
+          font-size:       var(--ddd-font-size-m);
+          font-weight:     var(--ddd-font-weight-bold);
+          color:           var(--ddd-theme-default-potentialMidnight);
         }
 
         .header-text {
@@ -125,22 +148,22 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
           letter-spacing: 0.03em;
         }
 
-        .location {
+        .channel {
           font-size:  var(--ddd-font-size-4xs);
           color:      var(--ddd-theme-default-slateGray);
           font-style: italic;
         }
 
         .refresh-btn {
-          background:  none;
-          border:      none;
-          color:       var(--ddd-theme-default-slateGray);
-          font-size:   var(--ddd-font-size-m);
-          cursor:      pointer;
-          line-height: 1;
-          padding:     var(--ddd-spacing-1);
+          background:    none;
+          border:        none;
+          color:         var(--ddd-theme-default-slateGray);
+          font-size:     var(--ddd-font-size-m);
+          cursor:        pointer;
+          line-height:   1;
+          padding:       var(--ddd-spacing-1);
           border-radius: var(--ddd-radius-sm);
-          transition:  color 0.2s, transform 0.35s;
+          transition:    color 0.2s, transform 0.35s;
         }
         .refresh-btn:hover {
           color:     var(--ddd-theme-default-roarGolden);
@@ -149,29 +172,28 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
 
         /* ── image area ─────────────────────────────── */
         .image-wrap {
-          position:     relative;
-          width:        100%;
-          aspect-ratio: 1 / 1;
-          background:   var(--ddd-theme-default-potential0);
-          overflow:     hidden;
+          position:   relative;
+          width:      100%;
+          background: var(--ddd-theme-default-potential0);
+          overflow:   hidden;
         }
 
-        .fox-img {
+        .player-img {
           width:      100%;
-          height:     100%;
-          object-fit: cover;
+          height:     auto;
           display:    block;
+          object-fit: contain;
           opacity:    0;
           transition: opacity 0.35s ease, transform 0.4s ease;
         }
-        .fox-img.loaded {
+        .player-img.loaded {
           opacity: 1;
         }
-        .fox-img:hover {
+        .player-img:hover {
           transform: scale(1.03);
         }
 
-        /* shimmer skeleton */
+        /* shimmer skeleton shown while image is loading */
         .shimmer {
           position:        absolute;
           inset:           0;
@@ -222,7 +244,7 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
           stroke-linejoin: round;
         }
 
-        /* like states */
+        /* like button turns gold and fills when active */
         .like-btn.liked {
           color: var(--ddd-theme-default-roarGolden);
         }
@@ -234,16 +256,70 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
           animation: pop 0.25s ease;
         }
         @keyframes pop {
-          0%   { transform: scale(1);    }
-          50%  { transform: scale(1.4);  }
-          100% { transform: scale(1);    }
+          0%   { transform: scale(1);   }
+          50%  { transform: scale(1.4); }
+          100% { transform: scale(1);   }
         }
 
         .spacer { flex: 1; }
 
+        /* ── prev/next nav arrows overlaid on image ─── */
+        .nav-prev,
+        .nav-next {
+          position:        absolute;
+          top:             50%;
+          transform:       translateY(-50%);
+          background:      rgba(0,0,0,0.45);
+          border:          none;
+          color:           var(--ddd-theme-default-slateMaxLight);
+          width:           36px;
+          height:          36px;
+          border-radius:   var(--ddd-radius-circle);
+          display:         flex;
+          align-items:     center;
+          justify-content: center;
+          cursor:          pointer;
+          font-size:       var(--ddd-font-size-m);
+          transition:      background 0.2s, opacity 0.2s;
+          z-index:         2;
+        }
+        .nav-prev { left: var(--ddd-spacing-2); }
+        .nav-next { right: var(--ddd-spacing-2); }
+        .nav-prev:hover:not(:disabled),
+        .nav-next:hover:not(:disabled) {
+          background: rgba(0,0,0,0.75);
+        }
+        .nav-prev:disabled,
+        .nav-next:disabled {
+          opacity: 0.2;
+          cursor:  not-allowed;
+        }
+
+        /* slide counter pill floating at bottom center of image */
+        .nav-counter {
+          position:       absolute;
+          bottom:         var(--ddd-spacing-2);
+          left:           50%;
+          transform:      translateX(-50%);
+          background:     rgba(0,0,0,0.5);
+          color:          var(--ddd-theme-default-slateMaxLight);
+          font-size:      var(--ddd-font-size-4xs);
+          padding:        var(--ddd-spacing-1) var(--ddd-spacing-2);
+          border-radius:  var(--ddd-radius-sm);
+          letter-spacing: 0.05em;
+          z-index:        2;
+        }
+
         /* ── caption ─────────────────────────────────── */
         .caption {
-          padding: 0 var(--ddd-spacing-4) var(--ddd-spacing-4);
+          padding: var(--ddd-spacing-2) var(--ddd-spacing-4) var(--ddd-spacing-4);
+        }
+
+        .player-name {
+          font-size:     var(--ddd-font-size-m);
+          font-weight:   var(--ddd-font-weight-bold);
+          color:         var(--ddd-theme-default-roarGolden);
+          margin-bottom: var(--ddd-spacing-1);
         }
 
         .caption-text {
@@ -253,37 +329,15 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
           margin-bottom: var(--ddd-spacing-2);
         }
 
-        .caption-text strong {
-          color:        var(--ddd-theme-default-roarGolden);
-          margin-right: var(--ddd-spacing-1);
-        }
-
         .timestamp {
           font-size:      var(--ddd-font-size-4xs);
           color:          var(--ddd-theme-default-slateGray);
           letter-spacing: 0.08em;
           text-transform: uppercase;
+          margin-top:     var(--ddd-spacing-2);
         }
 
-        /* ── source link ─────────────────────────────── */
-        .source-link {
-          display:         block;
-          text-align:      center;
-          padding:         var(--ddd-spacing-3) var(--ddd-spacing-4);
-          border-top:      var(--ddd-border-sm) solid var(--ddd-theme-default-navy70);
-          font-size:       var(--ddd-font-size-4xs);
-          color:           var(--ddd-theme-default-navy40);
-          text-decoration: none;
-          letter-spacing:  0.1em;
-          text-transform:  uppercase;
-          transition:      color 0.2s, background 0.2s;
-        }
-        .source-link:hover {
-          color:      var(--ddd-theme-default-roarGolden);
-          background: var(--ddd-theme-default-potential50);
-        }
-
-        /* ── error state ────────────────────────────── */
+        /* error state */
         .error-state {
           padding:    var(--ddd-spacing-10) var(--ddd-spacing-4);
           text-align: center;
@@ -306,7 +360,7 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
           background: var(--ddd-theme-default-potential50);
         }
 
-        /* ── responsive ─────────────────────────────── */
+        /*responsive */
         @media (max-width: 480px) {
           .card,
           .placeholder {
@@ -315,11 +369,11 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
           }
         }
 
-        /* ── light mode override ────────────────────── */
+        /*light mode override*/
         @media (prefers-color-scheme: light) {
           .card,
           .placeholder {
-            background:  var(--ddd-theme-default-slateMaxLight);
+            background:   var(--ddd-theme-default-slateMaxLight);
             border-color: var(--ddd-theme-default-limestoneGray);
           }
           .card-header {
@@ -331,25 +385,24 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
           .caption-text {
             color: var(--ddd-theme-default-coalyGray);
           }
-          .source-link {
-            border-color: var(--ddd-theme-default-limestoneGray);
-            color:        var(--ddd-theme-default-slateGray);
-          }
-          .source-link:hover {
-            background: var(--ddd-theme-default-limestoneLight);
-          }
         }
       `,
     ];
   }
 
-  // ── lifecycle ──────────────────────────────────────
-
+  /**
+   * Lifecycle — runs when element is added to the DOM
+   * Sets up the IntersectionObserver for lazy loading
+   */
   connectedCallback() {
     super.connectedCallback();
     this._setupIntersectionObserver();
   }
 
+  /**
+   * Lifecycle — runs when element is removed from the DOM
+   * Cleans up the IntersectionObserver to avoid memory leaks
+   */
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this._observer) {
@@ -357,43 +410,42 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
     }
   }
 
-  // ── IntersectionObserver lazy load ─────────────────
-
+  /**
+   * Sets up an IntersectionObserver on the host element
+   * 
+   */
   _setupIntersectionObserver() {
     this._observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting && !this.elementVisible) {
             this.elementVisible = true;
-            this._fetchFox();
-            // once visible and loaded, no need to keep observing
+            this._fetchData();
             this._observer.disconnect();
           }
         });
       },
       {
-        // start loading slightly before fully in view
         rootMargin: "100px",
         threshold:  0.1,
       }
     );
-
-    // observe the host element itself
     this._observer.observe(this);
   }
 
-  // ── data fetch ─────────────────────────────────────
-
-  async _fetchFox() {
-    this.loading  = true;
-    this.foxImage = "";
-    this.foxLink  = "";
+  /**
+   * Fetches player and author data from images.json
+   * Sets this.author and this.images from the response
+   * Sets loading state during the request
+   */
+  async _fetchData() {
+    this.loading = true;
     try {
-      const res = await fetch("https://randomfox.ca/floof/");
+      const res = await fetch("./images.json");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      this.foxImage = data.image;
-      this.foxLink  = data.link;
+      this.author = data.author;
+      this.images = data.images;
     } catch (err) {
       console.warn("[insta-app] fetch failed:", err);
     } finally {
@@ -401,94 +453,153 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
     }
   }
 
-  // ── event handlers ─────────────────────────────────
+  /**
+   * Moves to the previous player card
+   * Only runs if activeIndex is greater than 0
+   */
+  _prev() {
+    if (this.activeIndex > 0) {
+      this.activeIndex--;
+    }
+  }
 
+  /**
+   * Moves to the next player card
+   * Only runs if activeIndex is less than the last index
+   */
+  _next() {
+    if (this.activeIndex < this.images.length - 1) {
+      this.activeIndex++;
+    }
+  }
+
+  /**
+   * Toggles the liked state on the current player
+   * Spreads the images array to trigger Lit reactivity
+   * Triggers the pop animation on the like button
+   */
   _toggleLike() {
-    this.liked = !this.liked;
+    const player = this.images[this.activeIndex];
+    if (!player) return;
+    player.liked = !player.liked;
+    this.images = [...this.images];
+
     const btn = this.shadowRoot?.querySelector(".like-btn");
     if (btn) {
       btn.classList.remove("pop");
-      void btn.offsetWidth;     // force reflow to restart animation
+      void btn.offsetWidth;
       btn.classList.add("pop");
     }
   }
 
+  /**
+   * Adds the loaded class to the image once it finishes loading
+   * Triggers the fade-in transition
+   */
   _onImgLoad(e) {
     e.target.classList.add("loaded");
   }
 
-  _onRefresh() {
-    this._fetchFox();
-  }
-
+  /**
+   * Shares the current player's image URL
+   * Uses the Web Share API if available, otherwise copies to clipboard
+   */
   _share() {
-    if (!this.foxLink) return;
+    const player = this.images[this.activeIndex];
+    if (!player) return;
+    const shareUrl = player.src;
     if (navigator.share) {
-      navigator.share({ url: this.foxLink, title: "Check out this fox!" });
+      navigator.share({ url: shareUrl, title: player.name });
     } else {
-      navigator.clipboard?.writeText(this.foxLink);
+      navigator.clipboard?.writeText(shareUrl);
       alert("Link copied to clipboard!");
     }
   }
 
-  // ── render ─────────────────────────────────────────
-
+  /**
+   * Render
+   * 
+   */
   render() {
-    // KEY: if not yet visible, render nothing but a sized placeholder
-    // so the IntersectionObserver has something to observe and the
-    // layout doesn't collapse when the card eventually loads
     if (!this.elementVisible) {
       return html`<div class="placeholder"></div>`;
     }
 
+    if (this.loading) {
+      return html`
+        <div class="card">
+          <div class="image-wrap">
+            <div class="shimmer"></div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (!this.images || this.images.length === 0) {
+      return html`
+        <div class="card">
+          <div class="error-state">
+            <div>Could not load players</div>
+            <button class="error-btn" @click=${this._fetchData}>
+              Try again
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    const player = this.images[this.activeIndex];
+
     return html`
       <div class="card">
 
-        <!-- header -->
+        <!-- header pulls author name and channel from JSON -->
         <div class="card-header">
-          <div class="avatar">F</div>
+          <div class="avatar">S</div>
           <div class="header-text">
-            <span class="username">Fox</span>
-            <span class="location">Home of the Fox</span>
+            <span class="username">${this.author.name}</span>
+            <span class="channel">${this.author.channel}</span>
           </div>
           <button
             class="refresh-btn"
-            @click=${this._onRefresh}
-            title="Load a new fox"
-            aria-label="Refresh fox">↻</button>
+            @click=${this._fetchData}
+            title="Reload"
+            aria-label="Reload data">↻</button>
         </div>
 
-        <!-- Image -->
+        <!-- image with prev/next arrows and slide counter overlaid -->
         <div class="image-wrap">
-          ${this.loading
-            ? html`<div class="shimmer"></div>`
-            : this.foxImage
-              ? html`
-                  <img
-                    class="fox-img"
-                    src=${this.foxImage}
-                    alt="A random fox"
-                    @load=${this._onImgLoad}
-                  />
-                `
-              : html`
-                  <div class="error-state">
-                    <div>Could not load fox 🦊</div>
-                    <button class="error-btn" @click=${this._onRefresh}>
-                      Try again
-                    </button>
-                  </div>
-                `
-          }
+          <button
+            class="nav-prev"
+            @click=${this._prev}
+            ?disabled=${this.activeIndex === 0}
+            aria-label="Previous">‹</button>
+
+          <img
+            class="player-img"
+            src=${player.src}
+            alt=${player.name}
+            @load=${this._onImgLoad}
+          />
+
+          <button
+            class="nav-next"
+            @click=${this._next}
+            ?disabled=${this.activeIndex === this.images.length - 1}
+            aria-label="Next">›</button>
+
+          <span class="nav-counter">
+            ${this.activeIndex + 1} / ${this.images.length}
+          </span>
         </div>
 
-        <!-- action bar -->
+        <!-- like, share, and save action buttons -->
         <div class="actions">
 
           <button
-            class="action-btn like-btn ${this.liked ? "liked" : ""}"
+            class="action-btn like-btn ${player.liked ? "liked" : ""}"
             @click=${this._toggleLike}
-            aria-label="${this.liked ? "Unlike" : "Like"}">
+            aria-label="${player.liked ? "Unlike" : "Like"}">
             <svg viewBox="0 0 24 24">
               <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67
                        l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06
@@ -516,31 +627,20 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
 
         </div>
 
-        <!-- caption -->
+        <!-- caption shows player name, description, and date from JSON -->
         <div class="caption">
-          <div class="caption-text">
-            <strong>Fox</strong>
-            This is a fox, :)
-          </div>
-          <div class="timestamp">just now</div>
+          <div class="player-name">${player.name}</div>
+          <div class="caption-text">${player.description}</div>
+          <div class="timestamp">${player.dateTaken}</div>
         </div>
-
-        <!-- external link -->
-        ${this.foxLink
-          ? html`
-              <a
-                class="source-link"
-                href=${this.foxLink}
-                target="_blank"
-                rel="noopener noreferrer">
-                View Source
-              </a>`
-          : ""}
 
       </div>
     `;
   }
 
+  /**
+   * HAX integration
+   */
   static get haxProperties() {
     return new URL(`./lib/${this.tag}.haxProperties.json`, import.meta.url).href;
   }
