@@ -25,12 +25,14 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
 
   /**
    * Constructor sets default values
+   * Reads activeIndex from URL query param if present
    */
   constructor() {
     super();
     this.images         = [];
     this.author         = {};
-    this.activeIndex    = 0;
+    const params        = new URLSearchParams(window.location.search);
+    this.activeIndex    = parseInt(params.get("activeIndex")) || 0;
     this.loading        = false;
     this.elementVisible = false;
     this.t = this.t || {};
@@ -48,11 +50,11 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
 
   /**
    * Reactive properties
-   * images — array of player objects loaded from images.json
-   * author — single author object from images.json
-   * activeIndex — tracks which player card is currently displayed
-   * loading — true while fetch is in progress
-   * elementVisible — controlled by IntersectionObserver for lazy loading
+   * images 
+   * author 
+   * activeIndex 
+   * loading 
+   * elementVisible 
    */
   static get properties() {
     return {
@@ -79,6 +81,9 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
         :host {
           display: block;
           font-family: var(--ddd-font-navigation);
+          /* FOUC fix — reserve space before content loads */
+          min-height: 520px;
+          contain: layout;
         }
 
         /* ── placeholder shown before element is visible ── */
@@ -174,13 +179,14 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
         .image-wrap {
           position:   relative;
           width:      100%;
+          height:     380px;
           background: var(--ddd-theme-default-potential0);
           overflow:   hidden;
         }
 
         .player-img {
           width:      100%;
-          height:     auto;
+          height:     100%;
           display:    block;
           object-fit: contain;
           opacity:    0;
@@ -263,6 +269,13 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
 
         .spacer { flex: 1; }
 
+        .like-count {
+          font-size:   var(--ddd-font-size-4xs);
+          color:       var(--ddd-theme-default-roarGolden);
+          font-weight: var(--ddd-font-weight-bold);
+          margin-left: var(--ddd-spacing-1);
+        }
+
         /* ── prev/next nav arrows overlaid on image ─── */
         .nav-prev,
         .nav-next {
@@ -337,7 +350,7 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
           margin-top:     var(--ddd-spacing-2);
         }
 
-        /* error state */
+        /* ── error state ────────────────────────────── */
         .error-state {
           padding:    var(--ddd-spacing-10) var(--ddd-spacing-4);
           text-align: center;
@@ -360,7 +373,7 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
           background: var(--ddd-theme-default-potential50);
         }
 
-        /*responsive */
+        /* ── responsive ─────────────────────────────── */
         @media (max-width: 480px) {
           .card,
           .placeholder {
@@ -369,22 +382,27 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
           }
         }
 
-        /*light mode override*/
-        @media (prefers-color-scheme: light) {
-          .card,
-          .placeholder {
-            background:   var(--ddd-theme-default-slateMaxLight);
-            border-color: var(--ddd-theme-default-limestoneGray);
-          }
-          .card-header {
-            border-color: var(--ddd-theme-default-limestoneGray);
-          }
-          .username {
-            color: var(--ddd-theme-default-potentialMidnight);
-          }
-          .caption-text {
-            color: var(--ddd-theme-default-coalyGray);
-          }
+        /* ── light-dark() color scheme support (2024) ── */
+        :host {
+          color-scheme: light dark;
+        }
+
+        .card,
+        .placeholder {
+          background:   light-dark(var(--ddd-theme-default-slateMaxLight), var(--ddd-theme-default-potentialMidnight));
+          border-color: light-dark(var(--ddd-theme-default-limestoneGray), var(--ddd-theme-default-navy70));
+        }
+
+        .card-header {
+          border-color: light-dark(var(--ddd-theme-default-limestoneGray), var(--ddd-theme-default-navy70));
+        }
+
+        .username {
+          color: light-dark(var(--ddd-theme-default-potentialMidnight), var(--ddd-theme-default-slateMaxLight));
+        }
+
+        .caption-text {
+          color: light-dark(var(--ddd-theme-default-coalyGray), var(--ddd-theme-default-slateLight));
         }
       `,
     ];
@@ -401,7 +419,7 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
 
   /**
    * Lifecycle — runs when element is removed from the DOM
-   * Cleans up the IntersectionObserver to avoid memory leaks
+   * 
    */
   disconnectedCallback() {
     super.disconnectedCallback();
@@ -441,7 +459,7 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
   async _fetchData() {
     this.loading = true;
     try {
-      const res = await fetch("./images.json");
+      const res = await fetch(new URL("./images.json", import.meta.url).href);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       this.author = data.author;
@@ -454,12 +472,23 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
   }
 
   /**
+   * Updates the URL query param to reflect the current activeIndex
+   * Allows linking directly to a specific slide
+   */
+  _updateUrl(index) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("activeIndex", index);
+    history.pushState(null, "", url.toString());
+  }
+
+  /**
    * Moves to the previous player card
    * Only runs if activeIndex is greater than 0
    */
   _prev() {
     if (this.activeIndex > 0) {
       this.activeIndex--;
+      this._updateUrl(this.activeIndex);
     }
   }
 
@@ -470,12 +499,12 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
   _next() {
     if (this.activeIndex < this.images.length - 1) {
       this.activeIndex++;
+      this._updateUrl(this.activeIndex);
     }
   }
 
   /**
    * Toggles the liked state on the current player
-   * Spreads the images array to trigger Lit reactivity
    * Triggers the pop animation on the like button
    */
   _toggleLike() {
@@ -502,7 +531,7 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
 
   /**
    * Shares the current player's image URL
-   * Uses the Web Share API if available, otherwise copies to clipboard
+   *
    */
   _share() {
     const player = this.images[this.activeIndex];
@@ -518,7 +547,8 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
 
   /**
    * Render
-   * 
+   * Returns a placeholder if the element is not yet visible
+   * Otherwise renders the full card with header, image, actions, and caption
    */
   render() {
     if (!this.elementVisible) {
@@ -605,6 +635,7 @@ export class InstaApp extends DDDSuper(I18NMixin(LitElement)) {
                        l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06
                        L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
             </svg>
+            ${player.liked ? html`<span class="like-count">1 like</span>` : ""}
           </button>
 
           <button
